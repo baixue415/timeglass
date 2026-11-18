@@ -25,6 +25,12 @@ contextBridge.exposeInMainWorld('api', {
     image: file => invoke('meta:image', file),
     remove: id => invoke('meta:remove', id)
   },
+  /* 键鼠活跃度（按分钟聚合，按天查询） */
+  activity: {
+    day: d => invoke('activity:day', d),
+    month: m => invoke('activity:month', m),
+    today: () => invoke('activity:today')
+  },
   /* 文件与系统 */
   dialog: {
     pickVideo: () => invoke('dialog:pickVideo'),

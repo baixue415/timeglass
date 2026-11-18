@@ -48,7 +48,11 @@ let stats = null;
 let captureStatus = null;
 let curDay = dayKey(Date.now());
 let calMonth = new Date(); calMonth.setDate(1);
-let archFilter = { q: '', app: '' };
+let archFilter = { q: '', app: '', day: null, range: 'all', groupBy: 'day', sort: 'desc', selectMode: false, selected: new Set() };
+const collapsedGroups = new Set(); // 图库折叠的分组 key
+let hourSel = new Set();   // 热力条选中的小时
+let hourAnchor = null;     // Shift 区间选择的锚点
+let liveTimer = null;      // 实时数字刷新定时器
 let ffmpegOk = null;
 
 const CRUMBS = {
@@ -75,98 +79,208 @@ async function goto(view) {
    01 · 时间轴
    ============================================================ */
 async function renderTimeline() {
+  if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
   const view = $('#view-timeline');
-  const shots = await api.meta.list({ fromTs: Date.now() - 864e5, limit: 400 });
-  const byHour = {};
-  for (const s of shots) byHour[new Date(s.ts).getHours()] = (byHour[new Date(s.ts).getHours()] || 0) + 1;
-  const hours = Object.keys(byHour).map(Number).sort((a, b) => b - a).slice(0, 4);
+  const y = calMonth.getFullYear(), m = calMonth.getMonth();
+  const monthKey = `${y}-${String(m + 1).padStart(2, '0')}`;
+  const actMonth = await api.activity.month(monthKey);
+  const actDay = await api.activity.day(curDay);
+  const dayStart = new Date(curDay + 'T00:00:00').getTime();
+  const dayShots = await api.meta.list({ fromTs: dayStart, toTs: dayStart + 86400000, limit: 300 });
 
-  const cal = buildCalendar();
-  const topApps = Object.entries(stats?.byApp || {}).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const cal = buildCalendar(actMonth);
+  const detail = buildDayDetail(actDay, curDay);
+  const shotsHtml = buildDayShots(dayShots);
+  // 应用分布：按选中日期当天的截图统计（随日历选中日变化）
+  const dayApps = {};
+  for (const s of dayShots) if (s.app) dayApps[s.app] = (dayApps[s.app] || 0) + 1;
+  const topApps = Object.entries(dayApps).sort((a, b) => b[1] - a[1]).slice(0, 4);
   const maxApp = topApps.length ? topApps[0][1] : 1;
 
   view.innerHTML = `
   <div class="grid2">
     <div>
-      <div class="card" data-name="时段记录">
-        <h3>今天与最近 24 小时</h3>
-        <div class="hint">截图画面保持干净 · 时间与窗口信息写在元数据里</div>
-        ${hours.length ? hours.map(h => `
-          <div class="hourrow">
-            <div class="hlab">${String(h).padStart(2, '0')}时</div>
-            <div class="thumbs" data-hour="${h}"></div>
-          </div>`).join('') : '<div class="empty">还没有采集记录 —— 等待第一个间隔跑完，或点右上角「立即截屏」</div>'}
+      <div class="card" data-name="活跃度日历">
+        <div class="calhead">
+          <b>${y} 年 ${m + 1} 月</b>
+          <span class="nav"><button id="cal-prev">‹</button><button id="cal-today">今</button><button id="cal-next">›</button></span>
+        </div>
+        <div class="cal">${cal.html}</div>
+        <div class="callegend"><span>活跃度</span><i class="h0"></i><i class="h1"></i><i class="h2"></i><i class="h3"></i><i class="h4"></i><span>低→高</span></div>
       </div>
       <div class="card" data-name="应用分布">
-        <h3>最近 7 天应用分布</h3>
-        <div class="hint">来自窗口戳元数据（前台窗口进程名）</div>
+        <h3>当天应用分布</h3>
+        <div class="hint">选中日期的截图按前台应用统计</div>
         ${topApps.length ? topApps.map(([app, n]) => `
           <div class="appbar">
             <div class="top"><span class="n">${esc(app)}</span><b>${n} 张</b></div>
             <div class="bar"><i style="width:${Math.max(4, n / maxApp * 100)}%"></i></div>
-          </div>`).join('') : '<div class="empty">开启「窗口戳元数据」后，这里会按应用统计截图数量</div>'}
+          </div>`).join('') : '<div class="empty">这天没有截图，或未记录窗口应用</div>'}
       </div>
     </div>
     <div>
-      <div class="card" data-name="日历">
-        <div class="calhead">
-          <b>${calMonth.getFullYear()} 年 ${calMonth.getMonth() + 1} 月</b>
-          <span class="nav"><button id="cal-prev">‹</button><button id="cal-today">今</button><button id="cal-next">›</button></span>
-        </div>
-        <div class="cal">${cal.html}</div>
-      </div>
-      <div class="card" data-name="今日统计">
-        <h3>采集统计</h3>
-        <div class="statrow" style="margin-top:10px">
-          <div class="stat"><b>${stats?.todayCount ?? 0}</b><span>今天</span></div>
-          <div class="stat"><b>${stats?.weekCount ?? 0}</b><span>7 天</span></div>
-          <div class="stat"><b>${stats?.total ?? 0}</b><span>累计</span></div>
-        </div>
-        <div class="hint" style="margin-top:12px;margin-bottom:0">存储目录：${esc(settings.storage.dir)}<br>
-        保留 ${settings.storage.keepDays || '∞'} 天 · 上限 ${settings.storage.maxGB} GB · 到达后自动从最旧开始清理</div>
-      </div>
+      <div class="card" data-name="日详情">${detail}</div>
+      <div class="card" data-name="当天截图">${shotsHtml}</div>
     </div>
   </div>`;
 
-  // 缩略图懒加载
-  for (const h of hours) {
-    const wrap = view.querySelector(`.thumbs[data-hour="${h}"]`);
-    const list = shots.filter(s => new Date(s.ts).getHours() === h).sort((a, b) => b.ts - a.ts).slice(0, 8);
-    for (const s of list) {
-      const d = document.createElement('div');
-      d.className = 'thumb';
-      d.innerHTML = `<img alt=""><span class="t">${fmtTime(s.ts)}</span>`;
-      wrap.appendChild(d);
-      thumbOf(s.file).then(url => { if (url) d.querySelector('img').src = url; });
-      d.onclick = () => openDetail(s);
-    }
-  }
+  // 日详情截图懒加载
+  view.querySelectorAll('.daythumbs .thumb').forEach((el, i) => {
+    const s = dayShots[i];
+    if (!s) return;
+    el.onclick = () => openDetail(s);
+    thumbOf(s.file).then(u => { if (u) { const img = el.querySelector('img'); if (img) img.src = u; } });
+  });
+
+  // 「查看当天全部」→ 带日期筛选跳图库
+  const moreBtn = view.querySelector('#day-more');
+  if (moreBtn) moreBtn.onclick = () => {
+    archFilter = { q: '', app: '', day: curDay, range: 'all', groupBy: 'day', sort: 'desc', selectMode: false, selected: new Set() };
+    goto('archive');
+  };
 
   view.querySelector('#cal-prev').onclick = async () => { calMonth.setMonth(calMonth.getMonth() - 1); await renderTimeline(); E.apply(); };
   view.querySelector('#cal-next').onclick = async () => { calMonth.setMonth(calMonth.getMonth() + 1); await renderTimeline(); E.apply(); };
   view.querySelector('#cal-today').onclick = async () => { calMonth = new Date(); calMonth.setDate(1); curDay = dayKey(Date.now()); await renderTimeline(); E.apply(); };
-  view.querySelectorAll('.cal .cell[data-day]').forEach(c => c.onclick = () => {
+  view.querySelectorAll('.cal .cell[data-day]').forEach(c => c.onclick = async () => {
     curDay = c.dataset.day;
-    archFilter = { q: '', app: '' };
-    goto('archive');
+    await renderTimeline();
+    E.apply();
   });
+
+  // 小时格区间选择 + 实时数字跳变
+  bindHourSelect(view, actDay);
+  startLiveStats(actDay, curDay);
 }
 
-function buildCalendar() {
+function activityScore(v) { return (v.k || 0) + (v.c || 0) + (v.m || 0) / 100; }
+
+function buildCalendar(actMonth) {
   const y = calMonth.getFullYear(), m = calMonth.getMonth();
   const first = new Date(y, m, 1);
   const start = (first.getDay() + 6) % 7; // 周一开头
   const days = new Date(y, m + 1, 0).getDate();
   const byDay = stats?.byDay || {};
   const todayK = dayKey(Date.now());
+  const scores = Object.values(actMonth || {}).map(activityScore);
+  const maxScore = Math.max(1, ...scores);
   let html = '一二三四五六日'.split('').map(d => `<span class="dow">${d}</span>`).join('');
   for (let i = 0; i < start; i++) html += '<span class="cell dim"></span>';
   for (let d = 1; d <= days; d++) {
     const k = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
     const n = byDay[k] || 0;
-    html += `<span class="cell ${n ? 'has' : ''} ${k === todayK ? 'today' : ''} ${k === curDay ? 'sel' : ''}" data-day="${k}">${d}${n ? `<span class="cnt">${n}</span>` : ''}</span>`;
+    const av = actMonth ? actMonth[k] : null;
+    const score = av ? activityScore(av) : 0;
+    const lv = score > 0 ? Math.min(4, Math.max(1, Math.ceil(score / maxScore * 4))) : 0;
+    html += `<span class="cell heat-${lv} ${k === todayK ? 'today' : ''} ${k === curDay ? 'sel' : ''}" data-day="${k}">${d}${n ? `<span class="cnt">${n}</span>` : ''}</span>`;
   }
   return { html };
+}
+
+function buildDayDetail(actDay, day) {
+  const d = new Date(day + 'T00:00:00');
+  const wd = '日一二三四五六'[d.getDay()];
+  const hours = Array(24).fill(0);
+  let K = 0, C = 0, M = 0;
+  for (const [mm, v] of Object.entries(actDay || {})) {
+    const h = parseInt(mm.slice(0, 2), 10);
+    if (h >= 0 && h < 24) hours[h] += activityScore(v);
+    K += v.k || 0; C += v.c || 0; M += v.m || 0;
+  }
+  const maxH = Math.max(1, ...hours);
+  const heat = hours.map((s, i) => `<span class="hhb" data-hour="${i}" title="${i}时" style="opacity:${s > 0 ? (0.15 + (s / maxH) * 0.85) : 0.06}"></span>`).join('');
+  const total = Math.round(K + C + M / 100);
+  return `<div class="ddhead"><h3>${d.getMonth() + 1} 月 ${d.getDate()} 日 · 周${wd}</h3><span class="ddscore" id="dd-total">活跃度 ${total}</span></div>
+    <div class="hint">当天的键鼠活跃度节奏 · 点小时格看区间累加（Shift 连选 / Ctrl 多选）</div>
+    <div class="hourheat" id="hourheat">${heat}</div>
+    <div class="hourlabs"><span>0</span><span>6</span><span>12</span><span>18</span><span>24</span></div>
+    <div class="hourselinfo" id="hourselinfo"></div>
+    <div class="statrow" style="margin-top:14px">
+      <div class="stat"><b id="dd-k">${K}</b><span>键盘</span></div>
+      <div class="stat"><b id="dd-c">${C}</b><span>点击</span></div>
+      <div class="stat"><b id="dd-m">${Math.round(M).toLocaleString()}</b><span>移动 px</span></div>
+    </div>`;
+}
+
+function buildDayShots(dayShots) {
+  if (!dayShots.length) return `<h3>当天截图</h3><div class="empty" style="margin-top:10px">这天没有截图</div>`;
+  const PREVIEW = 6;
+  const preview = dayShots.slice(0, PREVIEW);
+  const thumbs = preview.map(s => `<div class="thumb"><img alt=""><span class="t">${fmtTime(s.ts)}</span></div>`).join('');
+  const more = dayShots.length > PREVIEW ? `<button class="btn morebtn" id="day-more">查看全部 ${dayShots.length} 张 →</button>` : '';
+  return `<div class="dhrow" style="margin:0"><h3 style="margin:0">当天截图 <span class="dhcount">${dayShots.length} 张</span></h3>${more}</div>
+    <div class="daythumbs thumbs" style="margin-top:12px">${thumbs}</div>`;
+}
+
+/* 小时格区间选择：单击单选 / Shift 连选 / Ctrl 多选 */
+function bindHourSelect(view, actDay) {
+  view.querySelectorAll('.hourheat .hhb').forEach(el => {
+    el.onclick = (e) => {
+      const h = +el.dataset.hour;
+      if (e.shiftKey && hourAnchor != null) {
+        const a = Math.min(hourAnchor, h), b = Math.max(hourAnchor, h);
+        hourSel.clear();
+        for (let i = a; i <= b; i++) hourSel.add(i);
+      } else if (e.ctrlKey || e.metaKey) {
+        hourSel.has(h) ? hourSel.delete(h) : hourSel.add(h);
+        hourAnchor = h;
+      } else {
+        // 单击：点已选中的 → 取消该个；否则单选（清空后选中）
+        if (hourSel.has(h)) hourSel.delete(h);
+        else { hourSel.clear(); hourSel.add(h); }
+        hourAnchor = h;
+      }
+      refreshHourSel(actDay);
+    };
+  });
+  refreshHourSel(actDay);
+}
+
+function refreshHourSel(actDay) {
+  document.querySelectorAll('.hourheat .hhb').forEach(el => {
+    el.classList.toggle('sel', hourSel.has(+el.dataset.hour));
+  });
+  const info = $('#hourselinfo');
+  if (!info) return;
+  if (!hourSel.size) { info.textContent = ''; return; }
+  let K = 0, C = 0, M = 0;
+  for (const [mm, v] of Object.entries(actDay || {})) {
+    const h = parseInt(mm.slice(0, 2), 10);
+    if (hourSel.has(h)) { K += v.k || 0; C += v.c || 0; M += v.m || 0; }
+  }
+  const hrs = [...hourSel].sort((a, b) => a - b);
+  const range = hrs.length === 1 ? `${hrs[0]} 时` : `${hrs[0]}–${hrs[hrs.length - 1]} 时`;
+  const hasNow = hrs.includes(new Date().getHours());
+  info.innerHTML = `已选 ${hrs.length} 小时（${range}）· 键盘 <b>${K}</b> · 点击 <b>${C}</b> · 移动 <b>${Math.round(M).toLocaleString()}</b>${hasNow ? ' <span class="nowtag">进行中</span>' : ''}`;
+}
+
+/* 实时数字跳变：仅当天，每 2 秒拉一次含内存数据的实时值 */
+function startLiveStats(actDay, day) {
+  if (day !== dayKey(Date.now())) return;
+  liveTimer = setInterval(async () => {
+    const view = $('#view-timeline');
+    if (!view || !view.classList.contains('on')) return;
+    try {
+      const data = await api.activity.today();
+      let K = 0, C = 0, M = 0;
+      for (const v of Object.values(data || {})) { K += v.k || 0; C += v.c || 0; M += v.m || 0; }
+      bumpStat('#dd-k', K);
+      bumpStat('#dd-c', C);
+      bumpStat('#dd-m', Math.round(M).toLocaleString());
+      if (hourSel.size) refreshHourSel(data);
+    } catch (e) { /* ignore */ }
+  }, 2000);
+}
+
+function bumpStat(sel, val) {
+  const el = document.querySelector(sel);
+  if (!el) return;
+  const s = String(val);
+  if (el.textContent === s) return;
+  el.textContent = s;
+  el.classList.remove('bump');
+  void el.offsetWidth;
+  el.classList.add('bump');
 }
 
 /* ============================================================
@@ -177,35 +291,132 @@ async function renderArchive() {
   const q = {};
   if (archFilter.q) q.title = archFilter.q;
   if (archFilter.app) q.app = archFilter.app;
-  let shots = await api.meta.list({ ...q, limit: 300 });
-  if (archFilter.day) { shots = shots.filter(s => dayKey(s.ts) === archFilter.day); }
+  let shots = await api.meta.list({ ...q, limit: 500 });
+  shots = filterByRange(shots, archFilter.range);
+  if (archFilter.day) shots = shots.filter(s => dayKey(s.ts) === archFilter.day);
+  shots.sort((a, b) => archFilter.sort === 'desc' ? b.ts - a.ts : a.ts - b.ts);
+  const groups = groupShots(shots, archFilter.groupBy);
+  const apps = Object.keys(stats?.byApp || {}).sort();
 
   view.innerHTML = `
   <div class="card" data-name="检索">
     <div class="filters">
-      <input class="input" id="f-q" placeholder="按窗口标题检索…" style="flex:1" value="${esc(archFilter.q)}">
-      <input class="input" id="f-app" placeholder="应用名…" style="width:160px" value="${esc(archFilter.app)}">
+      <input class="input" id="f-q" placeholder="按窗口标题搜索…" style="flex:1;min-width:160px" value="${esc(archFilter.q)}">
+      <select class="input" id="f-app" style="width:130px">
+        <option value="">全部应用</option>
+        ${apps.map(a => `<option value="${esc(a)}" ${archFilter.app === a ? 'selected' : ''}>${esc(a)}</option>`).join('')}
+      </select>
+      <select class="input" id="f-range" style="width:104px">
+        ${[['all', '全部'], ['today', '今天'], ['week', '本周'], ['month', '本月']].map(([v, l]) => `<option value="${v}" ${archFilter.range === v ? 'selected' : ''}>${l}</option>`).join('')}
+      </select>
+      <span class="seg" id="seg-group">
+        <button data-v="day" class="${archFilter.groupBy === 'day' ? 'on' : ''}">按天</button>
+        <button data-v="month" class="${archFilter.groupBy === 'month' ? 'on' : ''}">按月</button>
+      </span>
+      <button class="btn" id="f-sort">${archFilter.sort === 'desc' ? '新→旧' : '旧→新'}</button>
+      <button class="btn ${archFilter.selectMode ? 'pri' : ''}" id="f-select">${archFilter.selectMode ? '完成' : '多选'}</button>
       <button class="btn" id="f-clear">清除</button>
-      ${archFilter.day ? `<span class="statuschip">${archFilter.day} <button id="f-unday">✕</button></span>` : ''}
+      ${archFilter.day ? `<span class="statuschip">${archFilter.day} <button id="f-back-cal" title="回到日历视图">← 回日历</button> <button id="f-unday" title="清除日期筛选">✕</button></span>` : ''}
     </div>
-    ${shots.length ? `<div class="archgrid" id="archgrid"></div>` : '<div class="empty">没有匹配的截图</div>'}
+    ${shots.length ? `<div class="archgroups" id="archgroups"></div>` : '<div class="empty">没有匹配的截图</div>'}
+    ${archFilter.selectMode ? `<div class="batchbar">已选 <b>${archFilter.selected.size}</b> 张 <button class="btn danger" id="batch-del">删除选中</button></div>` : ''}
   </div>`;
 
-  const grid = view.querySelector('#archgrid');
-  for (const s of shots.slice(0, 60)) {
-    const d = document.createElement('div');
-    d.className = 'archcard';
-    d.innerHTML = `<img alt=""><div class="m"><span class="app">${esc(s.app || '·')}</span><span>${dayKey(s.ts).slice(5)} ${fmtTime(s.ts)}</span></div>`;
-    grid.appendChild(d);
-    thumbOf(s.file).then(url => { if (url) d.querySelector('img').src = url; });
-    d.onclick = () => openDetail(s);
+  const box = view.querySelector('#archgroups');
+  if (box) {
+    for (const [key, list] of groups) {
+      const collapsed = collapsedGroups.has(key);
+      const sec = document.createElement('div');
+      sec.className = 'archgroup';
+      const head = document.createElement('div');
+      head.className = 'ghead';
+      head.innerHTML = `<span class="gcaret">${collapsed ? '▸' : '▾'}</span><b>${groupLabel(key, archFilter.groupBy)}</b><span class="gcount">${list.length} 张</span>`;
+      head.onclick = () => { collapsedGroups.has(key) ? collapsedGroups.delete(key) : collapsedGroups.add(key); renderArchive(); };
+      sec.appendChild(head);
+      const grid = document.createElement('div');
+      grid.className = 'archgrid ggrid';
+      grid.style.display = collapsed ? 'none' : 'grid';
+      for (const s of list) {
+        const d = document.createElement('div');
+        const sel = archFilter.selected.has(s.id);
+        d.className = 'archcard' + (sel ? ' selected' : '');
+        d.innerHTML = `<img alt=""><div class="m"><span class="app">${esc(s.app || '·')}</span><span>${dayKey(s.ts).slice(5)} ${fmtTime(s.ts)}</span></div>${archFilter.selectMode ? '<span class="pick"></span>' : ''}`;
+        grid.appendChild(d);
+        thumbOf(s.file).then(url => { if (url) d.querySelector('img').src = url; });
+        d.onclick = () => {
+          if (archFilter.selectMode) {
+            archFilter.selected.has(s.id) ? archFilter.selected.delete(s.id) : archFilter.selected.add(s.id);
+            renderArchive();
+          } else {
+            openDetail(s);
+          }
+        };
+      }
+      sec.appendChild(grid);
+      box.appendChild(sec);
+    }
   }
 
   view.querySelector('#f-q').oninput = e => { archFilter.q = e.target.value; debounceRender(); };
-  view.querySelector('#f-app').oninput = e => { archFilter.app = e.target.value; debounceRender(); };
-  view.querySelector('#f-clear').onclick = async () => { archFilter = { q: '', app: '' }; await renderArchive(); E.apply(); };
+  view.querySelector('#f-app').onchange = e => { archFilter.app = e.target.value; renderArchive(); };
+  view.querySelector('#f-range').onchange = e => { archFilter.range = e.target.value; renderArchive(); };
+  view.querySelectorAll('#seg-group button').forEach(b => b.onclick = () => { archFilter.groupBy = b.dataset.v; renderArchive(); });
+  view.querySelector('#f-sort').onclick = () => { archFilter.sort = archFilter.sort === 'desc' ? 'asc' : 'desc'; renderArchive(); };
+  view.querySelector('#f-select').onclick = () => { archFilter.selectMode = !archFilter.selectMode; archFilter.selected.clear(); renderArchive(); };
+  view.querySelector('#f-clear').onclick = () => {
+    archFilter = { q: '', app: '', day: null, range: 'all', groupBy: 'day', sort: 'desc', selectMode: false, selected: new Set() };
+    renderArchive();
+  };
   const unday = view.querySelector('#f-unday');
-  if (unday) unday.onclick = async () => { delete archFilter.day; await renderArchive(); E.apply(); };
+  if (unday) unday.onclick = () => { archFilter.day = null; renderArchive(); };
+  const backCal = view.querySelector('#f-back-cal');
+  if (backCal) backCal.onclick = () => {
+    curDay = archFilter.day;
+    calMonth = new Date(archFilter.day + 'T00:00:00');
+    calMonth.setDate(1);
+    goto('timeline');
+  };
+  const batchDel = view.querySelector('#batch-del');
+  if (batchDel) batchDel.onclick = async () => {
+    const ids = [...archFilter.selected];
+    if (!ids.length) return;
+    if (!confirm(`确认删除选中的 ${ids.length} 张截图？此操作不可撤销。`)) return;
+    for (const id of ids) { try { await api.meta.remove(id); } catch (e) {} }
+    archFilter.selected.clear();
+    archFilter.selectMode = false;
+    toast(`已删除 ${ids.length} 张截图`);
+    refreshStats();
+    await renderArchive();
+    E.apply();
+  };
+  E.apply(); // 重渲染后重新求解玻璃材质，否则图库卡片会透明
+}
+
+function filterByRange(shots, range) {
+  if (range === 'all') return shots;
+  const now = new Date();
+  const startDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  if (range === 'today') return shots.filter(s => s.ts >= startDay);
+  if (range === 'week') { const dow = (now.getDay() + 6) % 7; return shots.filter(s => s.ts >= startDay - dow * 86400000); }
+  if (range === 'month') { return shots.filter(s => s.ts >= new Date(now.getFullYear(), now.getMonth(), 1).getTime()); }
+  return shots;
+}
+
+function groupShots(shots, groupBy) {
+  const map = new Map();
+  for (const s of shots) {
+    const key = groupBy === 'month' ? dayKey(s.ts).slice(0, 7) : dayKey(s.ts);
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(s);
+  }
+  return [...map.entries()];
+}
+
+function groupLabel(key, groupBy) {
+  if (groupBy === 'month') { const parts = key.split('-'); return `${parts[0]} 年 ${+parts[1]} 月`; }
+  const d = new Date(key + 'T00:00:00');
+  const wd = '日一二三四五六'[d.getDay()];
+  return `${d.getMonth() + 1} 月 ${d.getDate()} 日 · 周${wd}`;
 }
 let debTimer = null;
 function debounceRender() {
@@ -594,7 +805,6 @@ function renderAppearance() {
         <div class="hint" id="seed-hint">${S.manualSeed ? '已手动选定主题色 · 点击其他色块可更换' : '当前主题色来自采样 · 点击任意色块可手动指定'}</div>
         <div class="seedcards" id="seedcards"></div>
       </div>
-      </div>
       <div class="card" data-name="材质">
         <h3>材质全局</h3>
         <div class="setrow"><span class="lab">不透明度 α</span><span class="ctl"><input type="range" id="sl-alpha" min="0" max="1" step="0.02" value="${S.params.alpha}"><span class="valbadge" id="lb-alpha">${Math.round(S.params.alpha * 100)}%</span></span></div>
@@ -602,23 +812,13 @@ function renderAppearance() {
         <div class="setrow"><span class="lab">圆角倍率</span><span class="ctl"><input type="range" id="sl-radius" min="0" max="2" step="0.1" value="${S.params.radius}"><span class="valbadge" id="lb-radius">${S.params.radius}×</span></span></div>
         <div class="setrow"><span class="lab">阴影层级</span><span class="ctl"><input type="range" id="sl-shadow" min="0" max="3" step="1" value="${S.params.shadow}"><span class="valbadge" id="lb-shadow">${S.params.shadow}</span></span></div>
       </div>
+    </div>
+    <div>
       <div class="card" data-name="材质槽">
         <h3>五材质槽偏移</h3>
         <div class="hint">相对全局 α 的偏移，在 0/1 两端自动收敛</div>
         ${[['rail', '侧栏'], ['nav', '标签栏'], ['card', '卡片'], ['input', '输入'], ['list', '列表']].map(([k, l]) => `
           <div class="slotrow"><span class="sn">${l}</span><input type="range" data-slot="${k}" min="-0.4" max="0.4" step="0.02" value="${S.slots[k] ?? 0}"><span class="valbadge" data-slotv="${k}">${(S.slots[k] ?? 0).toFixed(2)}</span></div>`).join('')}
-      </div>
-    </div>
-    <div>
-      <div class="card" data-name="实时预览">
-        <h3>实时预览</h3>
-        <div class="minishell" id="minishell">
-          <span class="mr" data-solve="迷你侧栏" data-solve-kind="input"></span>
-          <span class="mt" data-solve="迷你顶栏" data-solve-kind="input"></span>
-          <span class="mc" data-solve="迷你卡片" data-solve-kind="list"></span>
-          <span class="mb" data-solve="迷你按钮" data-solve-kind="input"></span>
-        </div>
-        <div style="margin-top:14px" id="crlist"></div>
       </div>
       <div class="card" data-name="皮肤包">
         <h3>皮肤包三层</h3>
@@ -632,6 +832,16 @@ function renderAppearance() {
         <div class="btnrow"><button class="btn" id="btn-clearuser">清除我的覆盖</button></div>
       </div>
     </div>
+  </div>
+  <div class="card" data-name="实时预览">
+    <h3>实时预览</h3>
+    <div class="minishell" id="minishell">
+      <span class="mr" data-solve="迷你侧栏" data-solve-kind="input"></span>
+      <span class="mt" data-solve="迷你顶栏" data-solve-kind="input"></span>
+      <span class="mc" data-solve="迷你卡片" data-solve-kind="list"></span>
+      <span class="mb" data-solve="迷你按钮" data-solve-kind="input"></span>
+    </div>
+    <div style="margin-top:14px" id="crlist"></div>
   </div>`;
 
   document.querySelectorAll('.wthumb[data-wall]').forEach(w => w.onclick = () => {

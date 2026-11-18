@@ -11,6 +11,8 @@ const fs = require('fs');
 const store = require('./lib/store');
 const capture = require('./lib/capture');
 const transcode = require('./lib/transcode');
+const activity = require('./lib/activity');
+const activityStore = require('./lib/activityStore');
 
 let win = null;
 let trayWin = null;
@@ -207,7 +209,12 @@ ipcMain.handle('capture:status', () => statusPayload());
 ipcMain.handle('meta:list', (e, q) => {
   const shots = store.shots();
   const filtered = shots.filter(s => {
-    if (q.day && new Date(s.ts).toISOString().slice(0, 10) !== q.day) return false;
+    if (q.day) {
+      // 本地日期比较（toISOString 是 UTC，会差一天，与前端 dayKey 不一致）
+      const d = new Date(s.ts);
+      const key = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+      if (key !== q.day) return false;
+    }
     if (q.app && !(s.app || '').toLowerCase().includes(String(q.app).toLowerCase())) return false;
     if (q.title && !(s.title || '').toLowerCase().includes(String(q.title).toLowerCase())) return false;
     if (q.fromTs && s.ts < q.fromTs) return false;
@@ -217,6 +224,37 @@ ipcMain.handle('meta:list', (e, q) => {
   return filtered.slice(0, q.limit || 500);
 });
 ipcMain.handle('meta:stats', () => store.stats());
+// 键鼠活跃度查询（按天，缺省今天）：{ "HH:MM": {k,c,m} }
+ipcMain.handle('activity:day', (e, day) => {
+  let d = day;
+  if (!d) {
+    const n = new Date();
+    d = n.getFullYear() + '-' + String(n.getMonth() + 1).padStart(2, '0') + '-' + String(n.getDate()).padStart(2, '0');
+  }
+  return activityStore.getDay(d);
+});
+// 月度活跃度汇总（供日历热力）：{ "YYYY-MM-DD": {k,c,m} }
+ipcMain.handle('activity:month', (e, month) => {
+  let m = month;
+  if (!m) {
+    const n = new Date();
+    m = n.getFullYear() + '-' + String(n.getMonth() + 1).padStart(2, '0');
+  }
+  return activityStore.monthSummary(m);
+});
+// 当天实时活跃度（已落盘 + 内存待落盘），供界面实时跳变
+ipcMain.handle('activity:today', () => {
+  const d = new Date();
+  const day = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  const merged = { ...activityStore.getDay(day) };
+  const live = (activity.snapshot()[day]) || {};
+  for (const [mm, v] of Object.entries(live)) {
+    const cur = merged[mm] || { k: 0, c: 0, m: 0 };
+    cur.k += v.k || 0; cur.c += v.c || 0; cur.m += v.m || 0;
+    merged[mm] = cur;
+  }
+  return merged;
+});
 ipcMain.handle('meta:image', (e, file) => {
   try { return 'data:image/png;base64,' + fs.readFileSync(file).toString('base64'); }
   catch (err) { return null; }
@@ -275,6 +313,13 @@ ipcMain.handle('win:isMaximized', () => !!win?.isMaximized());
 let lockPaused = false;
 let idlePaused = false;
 let idleTimer = null;
+let activityFlushTimer = null;
+
+// 把采集到的按分钟活跃度落盘
+function flushActivity() {
+  const data = activity.drain();
+  if (data && Object.keys(data).length) activityStore.append(data);
+}
 
 // 空闲检测：键鼠不活跃超过阈值则标记 idlePaused（调度器保持运行，仅在采集时跳过）
 function checkIdle() {
@@ -306,6 +351,11 @@ app.whenReady().then(() => {
   idleTimer = setInterval(checkIdle, 15000);
   checkIdle(); // 启动时立即同步一次空闲状态
 
+  // 键鼠活跃度采集（全局钩子），按分钟聚合，定时落盘
+  activity.start();
+  activityStore.cleanup(store.getSettings().storage.keepDays || 90);
+  activityFlushTimer = setInterval(flushActivity, 60000);
+
   powerMonitor.on('lock-screen', () => { lockPaused = true; broadcast('tg-status', statusPayload()); });
   powerMonitor.on('unlock-screen', () => { lockPaused = false; broadcast('tg-status', statusPayload()); });
 
@@ -324,5 +374,5 @@ function registerHotkey(accel) {
 ipcMain.handle('app:rehotkey', (e, accel) => { registerHotkey(accel); return true; });
 
 app.on('window-all-closed', () => { /* 托盘常驻，不退出 */ });
-app.on('before-quit', () => { try { if (idleTimer) clearInterval(idleTimer); globalShortcut.unregisterAll(); } catch (e) {} });
-app.on('will-quit', () => { try { if (idleTimer) clearInterval(idleTimer); globalShortcut.unregisterAll(); } catch (e) {} });
+app.on('before-quit', () => { try { if (idleTimer) clearInterval(idleTimer); if (activityFlushTimer) clearInterval(activityFlushTimer); activity.stop(); flushActivity(); globalShortcut.unregisterAll(); } catch (e) {} });
+app.on('will-quit', () => { try { if (idleTimer) clearInterval(idleTimer); if (activityFlushTimer) clearInterval(activityFlushTimer); activity.stop(); flushActivity(); globalShortcut.unregisterAll(); } catch (e) {} });

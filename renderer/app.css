@@ -126,11 +126,13 @@ body.light .rail .rbtn.on { background: rgba(0,0,0,.08); }
   border: 0; background: transparent; color: var(--primary);
   cursor: pointer; font-size: 12px; padding: 0 2px; text-decoration: underline;
 }
+.statuschip button:hover { color: var(--fg); background: var(--scrim); border-radius: 4px; }
 
 /* 内容滚动区 */
 .content { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 20px 22px 28px; }
 .content::-webkit-scrollbar { width: 10px; }
 .content::-webkit-scrollbar-thumb { background: rgba(128,128,128,.35); border-radius: 5px; border: 2px solid transparent; background-clip: content-box; }
+.content::-webkit-scrollbar-thumb:hover { background: rgba(128,128,128,.62); background-clip: content-box; }
 .view { display: none; max-width: 1120px; margin: 0 auto; }
 .view.on { display: block; animation: fadein .25s ease; }
 @keyframes fadein { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
@@ -159,7 +161,11 @@ body.light .rail .rbtn.on { background: rgba(0,0,0,.08); }
 }
 .card h3 { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
 .card .hint { color: var(--fg3); font-size: 12px; margin-bottom: 12px; }
-.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.grid2 > div { min-width: 0; } /* 防止内容撑破列宽，导致两栏宽窄跳动 */
+/* 外观页：两列网格，同行等高对齐（短卡拉伸，避免高差突兀） */
+.appgrid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: stretch; }
+.appgrid > .card { margin-bottom: 0; }
 
 /* 时间轴时段卡 */
 .hourrow { display: flex; gap: 14px; margin-bottom: 14px; }
@@ -185,26 +191,71 @@ body.light .rail .rbtn.on { background: rgba(0,0,0,.08); }
 .cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
 .cal .dow { text-align: center; color: var(--fg3); font-size: 11px; padding: 2px 0; }
 .cal .cell {
-  aspect-ratio: 1; border-radius: var(--r-sm);
+  height: 28px; border-radius: var(--r-sm);
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   font-size: 12px; color: var(--fg2); cursor: pointer;
-  border: 1px solid transparent; position: relative;
+  border: 1px solid transparent; position: relative; overflow: hidden;
+  transition: background .12s, outline-color .12s;
 }
+.cal .cell:not(.dim):hover { outline: 1.5px solid var(--primary); outline-offset: 1px; }
+.cal .cell:not(.dim):not(.sel):hover { background: color-mix(in srgb, var(--primary) 16%, transparent); }
 .cal .cell.has { color: var(--fg); }
 .cal .cell .cnt { font-size: 9px; color: var(--primary); line-height: 1; }
+/* 活跃度热力 */
+.cal .cell.heat-1 { background: color-mix(in srgb, var(--primary) 12%, transparent); }
+.cal .cell.heat-2 { background: color-mix(in srgb, var(--primary) 28%, transparent); }
+.cal .cell.heat-3 { background: color-mix(in srgb, var(--primary) 48%, transparent); }
+.cal .cell.heat-4 { background: color-mix(in srgb, var(--primary) 72%, transparent); color: var(--on-primary); }
+.cal .cell.heat-4 .cnt { color: var(--on-primary); }
 .cal .cell.today { border-color: var(--primary); }
-.cal .cell.sel { background: var(--primary); color: var(--on-primary); }
-.cal .cell.sel .cnt { color: var(--on-primary); }
+.cal .cell.sel { outline: 2px solid var(--primary); outline-offset: 1px; }
 .cal .cell.dim { opacity: .3; }
+.callegend { display: flex; align-items: center; gap: 5px; margin-top: 12px; font-size: 11px; color: var(--fg3); }
+.callegend i { width: 12px; height: 12px; border-radius: 3px; }
+.callegend .h0 { background: var(--line); }
+.callegend .h1 { background: color-mix(in srgb, var(--primary) 12%, transparent); }
+.callegend .h2 { background: color-mix(in srgb, var(--primary) 28%, transparent); }
+.callegend .h3 { background: color-mix(in srgb, var(--primary) 48%, transparent); }
+.callegend .h4 { background: color-mix(in srgb, var(--primary) 72%, transparent); }
 .calhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .calhead .nav { display: flex; gap: 6px; }
 .calhead button {
   width: 26px; height: 26px; border: 1px solid var(--line); border-radius: var(--r-sm);
   background: var(--scrim); color: var(--fg); cursor: pointer;
 }
+.calhead button:hover { border-color: var(--primary); color: var(--primary); }
+/* 日详情 */
+.ddhead { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 2px; }
+.ddhead h3 { margin-bottom: 0; }
+.ddscore { font-size: 12px; color: var(--primary); font-variant-numeric: tabular-nums; }
+.hourheat { display: grid; grid-template-columns: repeat(24, 1fr); gap: 2px; margin: 10px 0 4px; }
+.hourheat .hhb { height: 22px; border-radius: 3px; background: var(--primary); cursor: pointer; transition: filter .12s, box-shadow .12s; }
+.hourheat .hhb:hover { filter: brightness(1.5) saturate(1.1); box-shadow: 0 0 0 1.5px var(--fg); }
+.hourheat .hhb.sel { outline: 2px solid var(--primary); outline-offset: 1px; box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 25%, transparent); }
+.hourselinfo { min-height: 18px; font-size: 12px; color: var(--fg2); margin-top: 6px; font-variant-numeric: tabular-nums; }
+.hourselinfo b { color: var(--primary); }
+.nowtag { display: inline-block; font-size: 10px; color: var(--primary); background: color-mix(in srgb, var(--primary) 14%, transparent); padding: 1px 6px; border-radius: 8px; margin-left: 4px; }
+.hourlabs { display: flex; justify-content: space-between; font-size: 10px; color: var(--fg3); }
+.dhrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 16px 0 10px; }
+.dh { font-size: 12px; color: var(--fg3); margin: 0; }
+.dhcount { font-size: 12px; color: var(--fg3); font-weight: 400; }
+.morebtn { font-size: 12px; padding: 4px 12px; flex: none; }
+.daythumbs { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; }
+.daythumbs .thumb { width: 100px; height: 62px; }
+/* 响应式：窄屏两栏→单栏 */
+@media (max-width: 960px) {
+  .grid2 { grid-template-columns: 1fr; }
+  .view { max-width: 100%; }
+}
+/* 更窄：图库网格更紧凑 */
+@media (max-width: 640px) {
+  .archgrid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+}
 
 /* 统计条 */
 .statrow { display: flex; gap: 10px; }
+.stat b.bump { animation: statbump .45s ease; }
+@keyframes statbump { 0% { transform: scale(1); } 40% { transform: scale(1.18); color: var(--primary); } 100% { transform: scale(1); } }
 .stat { flex: 1; text-align: center; padding: 10px 4px; border-radius: var(--r-md); background: var(--scrim); }
 .stat b { display: block; font-size: 18px; color: var(--fg); font-variant-numeric: tabular-nums; }
 .stat span { font-size: 11px; color: var(--fg3); }
@@ -224,11 +275,23 @@ body.light .rail .rbtn.on { background: rgba(0,0,0,.08); }
 }
 .input:focus, .select:focus { border-color: var(--primary); }
 .archgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 12px; }
-.archcard { border-radius: var(--r-md); overflow: hidden; border: 1px solid var(--line); cursor: pointer; background: var(--scrim); }
+.archcard { position: relative; border-radius: var(--r-md); overflow: hidden; border: 1px solid var(--line); cursor: pointer; background: var(--scrim); }
 .archcard:hover { outline: 2px solid var(--primary); }
+.archcard.selected { outline: 2px solid var(--primary); outline-offset: 1px; }
+.archcard .pick { position: absolute; top: 6px; right: 6px; width: 18px; height: 18px; border-radius: 50%; border: 2px solid #fff; background: rgba(0,0,0,.35); }
+.archcard.selected .pick { background: var(--primary); border-color: var(--primary); }
 .archcard img { width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block; }
 .archcard .m { padding: 8px 10px; font-size: 11px; color: var(--fg2); display: flex; justify-content: space-between; }
 .archcard .m .app { color: var(--primary); max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 图库按天/月分组 */
+.archgroups { display: flex; flex-direction: column; gap: 18px; }
+.archgroup .ghead { display: flex; align-items: center; gap: 8px; padding: 8px 4px; cursor: pointer; border-bottom: 1px solid var(--line); margin-bottom: 12px; transition: color .12s; }
+.archgroup .ghead:hover { color: var(--primary); }
+.archgroup .ghead b { font-size: 13px; }
+.archgroup .ghead .gcount { margin-left: auto; font-size: 12px; color: var(--fg3); font-variant-numeric: tabular-nums; }
+.archgroup .gcaret { font-size: 11px; color: var(--fg3); width: 12px; flex: none; }
+.batchbar { position: sticky; bottom: 8px; display: flex; align-items: center; gap: 12px; padding: 10px 16px; margin-top: 14px; background: var(--scrim); border: 1px solid var(--line); border-radius: var(--r-md); font-size: 13px; }
+.batchbar b { color: var(--primary); font-variant-numeric: tabular-nums; }
 
 /* 详情面板（右滑） */
 .detail {
@@ -271,10 +334,14 @@ body.light .rail .rbtn.on { background: rgba(0,0,0,.08); }
 .sw::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--fg3); transition: all .18s; }
 .sw.on { background: var(--primary); border-color: transparent; }
 .sw.on::after { left: 20px; background: var(--on-primary); }
+.sw:hover { border-color: var(--primary); }
+.sw.on:hover { filter: brightness(1.08); }
 /* 分段 */
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--r-sm); overflow: hidden; }
 .seg button { border: 0; background: var(--scrim); color: var(--fg2); padding: 6px 12px; font-size: 12px; cursor: pointer; }
 .seg button.on { background: var(--primary); color: var(--on-primary); }
+.seg button:not(.on):hover { color: var(--fg); background: color-mix(in srgb, var(--primary) 16%, transparent); }
+.seg button.on:hover { filter: brightness(1.08); }
 /* 滑块 */
 input[type=range] {
   -webkit-appearance: none; width: 160px; height: 4px;
@@ -335,6 +402,7 @@ body.light .cmdbox { background: rgba(0,0,0,.05); }
 }
 .wthumb img, .wthumb .grad { width: 100%; height: 100%; object-fit: cover; display: block; }
 .wthumb.on { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary), 0 6px 18px rgba(0,0,0,.3); }
+.wthumb:not(.add):hover { border-color: var(--primary); box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 45%, transparent); }
 .wthumb .lab {
   position: absolute; left: 0; right: 0; bottom: 0;
   font-size: 10px; text-align: center; padding: 2px;
@@ -355,6 +423,7 @@ body.light .cmdbox { background: rgba(0,0,0,.05); }
   padding: 10px; cursor: pointer; background: var(--scrim); text-align: center;
   transition: border-color .15s, box-shadow .15s, background .15s;
 }
+.seedcard:not(.on):hover { border-color: var(--primary); box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 35%, transparent); }
 .seedcard.on {
   border-color: var(--primary);
   background: var(--pc);

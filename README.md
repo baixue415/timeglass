@@ -34,6 +34,16 @@
 - 会自动抬升对比度，保证文字看得清（符合无障碍对比度标准）
 - 材质可调：不透明度、模糊、圆角、阴影，五处材质槽还能微调
 
+### 4. 键鼠活跃度 —— 记下你什么时候在忙
+
+后台用系统级全局钩子（uiohook）记录键鼠操作，按分钟聚合，不碰截图：
+
+- **键盘按键次数**（长按只算一次，不会被系统键盘重复虚增）
+- **鼠标点击次数**
+- **鼠标移动像素**
+
+时间轴上以**日历热力**呈现：每天一格，颜色深浅 = 当天活跃度；点某天看**当天 24 小时热力条**，可**单击 / Shift 连选 / Ctrl 多选**小时格，查看区间累加（键盘 / 点击 / 移动），数字**实时跳动**，含当前小时的区间会标注「进行中」。
+
 ## 快速开始
 
 ```bash
@@ -56,6 +66,7 @@ npm start        # 或双击 start.bat
 |---|---|
 | 截图 | `图片\Timeglass\YYYY-MM-DD\TG_HHMMSS.png` |
 | 设置 + 元数据 | `%APPDATA%\timeglass\data\`（settings.json / meta.json） |
+| 键鼠活跃度 | `%APPDATA%\timeglass\data\activity\YYYY-MM-DD.json`（按分钟 k/c/m） |
 | 主题状态 | 渲染进程 localStorage |
 
 ## 目录结构
@@ -68,6 +79,8 @@ timeglass/
 ├─ lib/
 │  ├─ store.js        设置 + 元数据持久化
 │  ├─ capture.js      截屏 + 窗口信息 + 去重 + 保留策略
+│  ├─ activity.js     键鼠活跃度采集（uiohook 全局钩子，按分钟聚合）
+│  ├─ activityStore.js 活跃度按天持久化
 │  └─ transcode.js    FFmpeg 参数 + 队列 + 进度
 ├─ renderer/
 │  ├─ index.html      外壳（标题栏 + 侧栏 + 五个视图）
