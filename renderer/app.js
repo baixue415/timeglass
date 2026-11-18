@@ -469,10 +469,12 @@ document.addEventListener('click', e => {
    03 · 转码工坊
    ============================================================ */
 const tc = {
-  input: null,
+  input: null, probe: null,
   container: 'mp4', vcodec: 'libx264', nvenc: false,
   mode: 'bitrate', bitrate: 2500, maxrate: 3, bufsize: 6, crf: 23,
-  fps: 0, scaleMode: 'keep', scaleW: 1920, scaleH: 1080, scalePct: 100,
+  fpsSeg: '0', fpsCustom: 30,
+  ss: '', to: '', outputName: '',
+  scaleMode: 'keep', scaleW: 1920, scaleH: 1080, scalePct: 100,
   audio: 'aac', abitrate: 128
 };
 const CODEC_LABEL = { libx264: 'H.264 (libx264)', libx265: 'H.265 (libx265)', copy: '视频流直通 (copy)' };
@@ -485,7 +487,8 @@ async function renderTranscode() {
 
   $('#view-transcode').innerHTML = `
   <div class="card" data-name="输入文件">
-    <div class="drop" id="drop"><b>拖放视频到这里，或点击选择文件</b>mp4 · mkv · mov · avi · webm …</div>
+    <div class="drop" id="drop">${tc.input ? `<b>${esc(tc.input.split(/[\\/]/).pop())}</b>点击重新选择` : '<b>拖放视频到这里，或点击选择文件</b>mp4 · mkv · mov · avi · webm …'}</div>
+    <div id="fileinfo" class="hint" style="margin-top:8px">${fileInfoHtml()}</div>
     ${ffmpegOk ? '' : '<div class="hint" style="color:var(--bad)">未在 PATH 中找到 ffmpeg —— 请安装 gyan.dev full build 并加入环境变量</div>'}
   </div>
   <div class="grid2">
@@ -505,14 +508,19 @@ async function renderTranscode() {
         <div class="setrow"><span class="lab">峰值 / 缓冲</span><span class="ctl"><input class="input" id="in-max" type="number" value="${p.maxrate}" step="0.5" style="width:80px"> M · <input class="input" id="in-buf" type="number" value="${p.bufsize}" step="0.5" style="width:80px"> M</span></div>` : `
         <div class="setrow"><span class="lab">CRF 值</span><span class="ctl"><input class="input" id="in-crf" type="number" value="${p.crf}" min="0" max="51" style="width:90px">（18≈高质 · 28≈均衡 · 40≈省空间）</span></div>`}
         <div class="setrow"><span class="lab">帧率</span><span class="ctl">
-          <span class="seg" id="seg-fps">${[0, 24, 30, 60].map(f => `<button data-v="${f}" class="${p.fps === f ? 'on' : ''}">${f === 0 ? '保持' : f}</button>`).join('')}</span></span></div>
+          <span class="seg" id="seg-fps">${[0, 24, 30, 60].map(f => `<button data-v="${f}" class="${p.fpsSeg === String(f) ? 'on' : ''}">${f === 0 ? '保持' : f}</button>`).join('')}<button data-v="custom" class="${p.fpsSeg === 'custom' ? 'on' : ''}">自定义</button></span></span></div>
+        ${p.fpsSeg === 'custom' ? `<div class="setrow"><span class="lab">自定义帧率</span><span class="ctl"><input class="input" id="in-fpsc" type="number" value="${p.fpsCustom || 30}" min="1" max="240" style="width:80px"> fps</span></div>` : ''}
         <div class="setrow"><span class="lab">分辨率</span><span class="ctl">
           <span class="seg" id="seg-scale"><button data-v="keep" class="${p.scaleMode === 'keep' ? 'on' : ''}">保持</button><button data-v="size" class="${p.scaleMode === 'size' ? 'on' : ''}">指定</button><button data-v="percent" class="${p.scaleMode === 'percent' ? 'on' : ''}">缩放%</button></span></span></div>
         ${p.scaleMode === 'size' ? `<div class="setrow"><span class="lab">宽 × 高</span><span class="ctl"><input class="input" id="in-sw" type="number" value="${p.scaleW}" style="width:90px"> × <input class="input" id="in-sh" type="number" value="${p.scaleH}" style="width:90px"></span></div>` : ''}
         ${p.scaleMode === 'percent' ? `<div class="setrow"><span class="lab">缩放比例</span><span class="ctl"><input class="input" id="in-sp" type="number" value="${p.scalePct}" min="10" max="100" style="width:90px"> %</span></div>` : ''}
+        <div class="setrow"><span class="lab">时间段<div class="d">留空转全片${p.probe && p.probe.duration > 0 ? ' · 总时长 ' + fmtDur(p.probe.duration) : ''}</div></span><span class="ctl">
+          <input class="input" id="in-ss" type="number" step="0.1" min="0" placeholder="开始秒" style="width:78px" value="${p.ss}"> ~ <input class="input" id="in-to" type="number" step="0.1" min="0" placeholder="结束秒" style="width:78px" value="${p.to}"></span></div>
         <div class="setrow"><span class="lab">音频</span><span class="ctl">
           <select class="select" id="sel-audio"><option value="aac" ${p.audio === 'aac' ? 'selected' : ''}>AAC 重编码</option><option value="copy" ${p.audio === 'copy' ? 'selected' : ''}>直通 (copy)</option><option value="ac3" ${p.audio === 'ac3' ? 'selected' : ''}>AC-3</option></select>
           ${p.audio !== 'copy' ? `<input class="input" id="in-ab" type="number" value="${p.abitrate}" style="width:80px"> kbps` : ''}</span></div>
+        <div class="setrow"><span class="lab">输出文件名<div class="d">留空自动命名 · 保存在源文件目录</div></span><span class="ctl">
+          <input class="input" id="in-outname" type="text" value="${p.outputName}" style="width:185px" placeholder="${p.input ? esc(p.input.split(/[\\/]/).pop().replace(/\.[^.]+$/, '')) + '.timeglass.' + p.container : '自动命名'}"></span></div>
       </div>
     </div>
     <div>
@@ -548,19 +556,22 @@ async function renderTranscode() {
 
   document.querySelectorAll('#seg-cont button').forEach(b => b.onclick = async () => { tc.container = b.dataset.v; await renderTranscode(); E.apply(); });
   document.querySelectorAll('#seg-mode button').forEach(b => b.onclick = async () => { tc.mode = b.dataset.v; await renderTranscode(); E.apply(); });
-  document.querySelectorAll('#seg-fps button').forEach(b => b.onclick = async () => { tc.fps = +b.dataset.v; await renderTranscode(); E.apply(); });
+  document.querySelectorAll('#seg-fps button').forEach(b => b.onclick = async () => { tc.fpsSeg = b.dataset.v; await renderTranscode(); E.apply(); });
   document.querySelectorAll('#seg-scale button').forEach(b => b.onclick = async () => { tc.scaleMode = b.dataset.v; await renderTranscode(); E.apply(); });
   $('#sel-codec').onchange = async e => { tc.vcodec = e.target.value; await renderTranscode(); E.apply(); };
   $('#sel-audio').onchange = async e => { tc.audio = e.target.value; await renderTranscode(); E.apply(); };
   const swN = $('#sw-nvenc');
   if (swN) swN.onclick = () => { tc.nvenc = !tc.nvenc; swN.classList.toggle('on', tc.nvenc); refreshCmd(); };
   const num = (id, key) => { const el = $('#' + id); if (el) el.onchange = e => { tc[key] = +e.target.value; refreshCmd(); }; };
+  const txt = (id, key) => { const el = $('#' + id); if (el) el.onchange = e => { tc[key] = e.target.value; refreshCmd(); }; };
   num('in-br', 'bitrate'); num('in-max', 'maxrate'); num('in-buf', 'bufsize'); num('in-crf', 'crf');
   num('in-sw', 'scaleW'); num('in-sh', 'scaleH'); num('in-sp', 'scalePct'); num('in-ab', 'abitrate');
+  num('in-fpsc', 'fpsCustom');
+  txt('in-ss', 'ss'); txt('in-to', 'to'); txt('in-outname', 'outputName');
 
   document.querySelectorAll('.preset').forEach(el => el.onclick = async () => {
     const v = presets[el.dataset.k];
-    Object.assign(tc, { container: v.container, vcodec: v.vcodec, mode: v.mode, bitrate: v.bitrate || 2500, maxrate: v.maxrate || 3, bufsize: v.bufsize || 6, crf: v.crf || 23, fps: v.fps || 0, audio: v.audio, abitrate: v.abitrate || 128 });
+    Object.assign(tc, { container: v.container, vcodec: v.vcodec, mode: v.mode, bitrate: v.bitrate || 2500, maxrate: v.maxrate || 3, bufsize: v.bufsize || 6, crf: v.crf || 23, fpsSeg: v.fps > 0 ? String(v.fps) : '0', audio: v.audio, abitrate: v.abitrate || 128 });
     if (v.scale) { tc.scaleMode = 'size'; const [w, h] = v.scale.split(':').map(Number); tc.scaleW = w; tc.scaleH = h; }
     else tc.scaleMode = 'keep';
     await renderTranscode(); E.apply();
@@ -569,28 +580,79 @@ async function renderTranscode() {
   $('#btn-copy').onclick = () => { navigator.clipboard.writeText($('#cmdbox').textContent); toast('命令已复制'); };
   $('#btn-start').onclick = async () => {
     if (!tc.input) return;
-    await api.transcode.add({ ...tc });
+    await api.transcode.add(previewParams());
     toast('已加入转码队列');
     renderJobs(await api.transcode.state());
   };
 
   renderJobs(state);
-  refreshCmd();
+  await refreshCmd();
 }
 
-function setInput(f) {
+async function setInput(f) {
   tc.input = f;
+  tc.probe = null;
   const drop = $('#drop');
   drop.innerHTML = `<b>${esc(f.split(/[\\/]/).pop())}</b>点击重新选择`;
   $('#btn-start').disabled = !(f && ffmpegOk);
   refreshCmd();
+  const info = $('#fileinfo');
+  if (info) info.textContent = '正在读取文件信息…';
+  try { tc.probe = await api.transcode.probe(f); } catch (e) { tc.probe = null; }
+  const info2 = $('#fileinfo');
+  if (info2) info2.innerHTML = fileInfoHtml();
+}
+/* 组装提交/预览参数：帧率档位、截取段、输出文件路径 */
+function previewParams() {
+  const p = { ...tc };
+  p.fps = tc.fpsSeg === 'custom' ? (+tc.fpsCustom || 30) : (+tc.fpsSeg || 0);
+  p.ss = parseFloat(tc.ss) || 0;
+  p.to = parseFloat(tc.to) || 0;
+  if (p.to <= p.ss) p.to = 0;
+  if (tc.input) {
+    const dir = tc.input.replace(/[\\/][^\\/]+$/, '');
+    const base = tc.input.split(/[\\/]/).pop().replace(/\.[^.]+$/, '');
+    let name = (tc.outputName || '').trim() || (base + '.timeglass.' + tc.container);
+    name = name.replace(/[\\/:*?"<>|]/g, '_');
+    if (!/\.[a-z0-9]+$/i.test(name)) name += '.' + tc.container;
+    p.output = dir + (/[\\/]$/.test(dir) ? '' : '\\') + name;
+  }
+  return p;
 }
 async function refreshCmd() {
   const box = $('#cmdbox');
   if (!box) return;
   if (!tc.input) { box.innerHTML = '<b>ffmpeg</b> -i "等待选择文件…"（命令将实时生成）'; return; }
-  const cmd = await api.transcode.preview({ ...tc });
+  const cmd = await api.transcode.preview(previewParams());
   box.textContent = cmd;
+  const info = $('#fileinfo');
+  if (info) info.innerHTML = fileInfoHtml();
+}
+function fmtBytes(n) {
+  if (!n) return '0 KB';
+  return n >= 1024 ** 3 ? (n / 1024 ** 3).toFixed(2) + ' GB' : n >= 1024 ** 2 ? (n / 1024 ** 2).toFixed(1) + ' MB' : Math.round(n / 1024) + ' KB';
+}
+function fmtDur(s) { const m = Math.floor(s / 60), ss = Math.round(s % 60); return m + ':' + String(ss).padStart(2, '0'); }
+function fileInfoHtml() {
+  if (!tc.probe) return '';
+  const { size, duration } = tc.probe;
+  const ss = parseFloat(tc.ss) || 0, to = parseFloat(tc.to) || 0;
+  const seg = to > ss ? to - ss : 0;
+  const dur = seg > 0 ? seg : duration;
+  let s = `源文件 ${fmtBytes(size)}`;
+  if (duration > 0) s += ` · 时长 ${fmtDur(duration)}`;
+  if (seg > 0) s += ` · 截取 ${fmtDur(ss)} ~ ${fmtDur(to)}`;
+  if (dur > 0 && tc.mode === 'bitrate') {
+    const kb = (tc.bitrate || 0) + (tc.audio !== 'copy' ? (tc.abitrate || 0) : 0);
+    if (kb > 0) {
+      const est = kb * 1000 * dur / 8;
+      const ratio = (size && duration) ? Math.round(est / (size * (dur / duration)) * 100) : 0;
+      s += ` · 预估输出 ≈ ${fmtBytes(est)}${ratio ? `（${ratio}%）` : ''}`;
+    }
+  } else if (dur > 0 && tc.mode === 'crf') {
+    s += ' · CRF 模式输出大小取决于画面复杂度';
+  }
+  return s;
 }
 function renderJobs(state) {
   const wrap = $('#joblist');
@@ -814,12 +876,6 @@ function renderAppearance() {
       </div>
     </div>
     <div>
-      <div class="card" data-name="材质槽">
-        <h3>五材质槽偏移</h3>
-        <div class="hint">相对全局 α 的偏移，在 0/1 两端自动收敛</div>
-        ${[['rail', '侧栏'], ['nav', '标签栏'], ['card', '卡片'], ['input', '输入'], ['list', '列表']].map(([k, l]) => `
-          <div class="slotrow"><span class="sn">${l}</span><input type="range" data-slot="${k}" min="-0.4" max="0.4" step="0.02" value="${S.slots[k] ?? 0}"><span class="valbadge" data-slotv="${k}">${(S.slots[k] ?? 0).toFixed(2)}</span></div>`).join('')}
-      </div>
       <div class="card" data-name="皮肤包">
         <h3>皮肤包三层</h3>
         <div class="hint">user 我的覆盖 → app 玻璃增强 → base 基础包（上层只改声明过的槽）</div>
@@ -830,6 +886,12 @@ function renderAppearance() {
             <span class="ctl">${id === 'base' ? '<span class="valbadge">内置</span>' : `<button class="sw ${L.enabled !== false ? 'on' : ''}" data-layer="${id}"></button>`}</span></div>`;
         }).join('')}
         <div class="btnrow"><button class="btn" id="btn-clearuser">清除我的覆盖</button></div>
+      </div>
+      <div class="card" data-name="材质槽">
+        <h3>五材质槽偏移</h3>
+        <div class="hint">相对全局 α 的偏移，在 0/1 两端自动收敛</div>
+        ${[['rail', '侧栏'], ['nav', '标签栏'], ['card', '卡片'], ['input', '输入'], ['list', '列表']].map(([k, l]) => `
+          <div class="slotrow"><span class="sn">${l}</span><input type="range" data-slot="${k}" min="-0.4" max="0.4" step="0.02" value="${S.slots[k] ?? 0}"><span class="valbadge" data-slotv="${k}">${(S.slots[k] ?? 0).toFixed(2)}</span></div>`).join('')}
       </div>
     </div>
   </div>

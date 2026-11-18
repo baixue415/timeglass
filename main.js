@@ -297,6 +297,7 @@ ipcMain.handle('transcode:clear', () => { transcode.clearDone(); return true; })
 ipcMain.handle('transcode:state', () => transcode.state());
 ipcMain.handle('transcode:preview', (e, params) => transcode.previewCommand(params));
 ipcMain.handle('transcode:presets', () => transcode.PRESETS);
+ipcMain.handle('transcode:probe', (e, p) => transcode.probe(p));
 
 ipcMain.handle('app:quit', () => { quitting = true; app.quit(); });
 ipcMain.handle('app:showMain', () => showMain());

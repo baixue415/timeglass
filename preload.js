@@ -52,7 +52,8 @@ contextBridge.exposeInMainWorld('api', {
     clear: () => invoke('transcode:clear'),
     state: () => invoke('transcode:state'),
     preview: p => invoke('transcode:preview', p),
-    presets: () => invoke('transcode:presets')
+    presets: () => invoke('transcode:presets'),
+    probe: p => invoke('transcode:probe', p)
   },
   /* 应用与窗口 */
   app: {
