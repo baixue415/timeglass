@@ -1,0 +1,17 @@
+# 依赖
+node_modules/
+
+# 构建产物
+dist*/
+release/
+release-*/
+out/
+
+# 临时与测试残留
+*.log
+shot-test.png
+*.tmp
+
+# 系统
+.DS_Store
+Thumbs.db

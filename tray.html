@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'">
+<title>时璃</title>
+<style>
+:root { --blur: 24px; --r: 14px; --fg: #f2ece7; --fg2: #c9bfb5; --fg3: #95887d;
+  --primary: #ffb68a; --on-primary: #3a2416; --line: rgba(255,255,255,.10); --scrim: rgba(0,0,0,.14);
+  --ok: #5dcaa5; --warn: #ef9f27; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  font: 13px/1.6 "Segoe UI", "Microsoft YaHei UI", sans-serif; color: var(--fg);
+  background: rgba(18, 14, 12, .72);
+  backdrop-filter: blur(var(--blur));
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px;
+}
+body.light { background: rgba(245, 242, 238, .78); color: #2a221c; --fg: #2a221c; --fg2: #5b4f44; --fg3: #8a7c6f; --line: rgba(0,0,0,.10); --scrim: rgba(0,0,0,.06); --primary: #a0522d; --on-primary: #fff; }
+h3 { font-size: 13px; margin-bottom: 2px; }
+.sub { font-size: 11px; color: var(--fg3); }
+.row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px dashed var(--line); }
+.row:last-child { border-bottom: 0; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); flex: none; }
+.paused .dot { background: var(--warn); }
+.mainrow { display: flex; justify-content: space-between; align-items: center; }
+.stats { display: flex; gap: 8px; margin: 12px 0; }
+.stat { flex: 1; text-align: center; padding: 10px 2px; border-radius: 10px; background: var(--scrim); }
+.stat b { display: block; font-size: 17px; }
+.stat span { font-size: 10px; color: var(--fg3); }
+.btnrow { display: flex; gap: 8px; margin: 8px 0 2px; }
+.btn {
+  flex: 1; border: 1px solid var(--line); border-radius: 9px;
+  background: var(--scrim); color: var(--fg); padding: 8px 4px; font-size: 12px; cursor: pointer;
+}
+.btn:hover { border-color: var(--primary); color: var(--primary); }
+.btn.pri { background: var(--primary); color: var(--on-primary); border-color: transparent; font-weight: 600; }
+.quick { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.kv { display: flex; justify-content: space-between; font-size: 12px; padding: 4px 0; color: var(--fg2); }
+.kv b { color: var(--fg); font-variant-numeric: tabular-nums; }
+.foot { display: flex; gap: 8px; margin-top: 10px; }
+.foot .btn { flex: 1; }
+</style>
+</head>
+<body>
+  <div class="row mainrow" id="status-row">
+    <div style="display:flex;align-items:center;gap:10px">
+      <span class="dot"></span>
+      <div><h3>时璃 Timeglass</h3><div class="sub" id="sub">采集运行中</div></div>
+    </div>
+    <div style="text-align:right"><div style="font-size:11px;color:var(--fg3)">下次</div><b id="next" style="font-variant-numeric:tabular-nums">--:--</b></div>
+  </div>
+  <div class="stats">
+    <div class="stat"><b id="st-today">0</b><span>今天</span></div>
+    <div class="stat"><b id="st-week">0</b><span>7 天</span></div>
+    <div class="stat"><b id="st-total">0</b><span>累计</span></div>
+  </div>
+  <div class="btnrow">
+    <button class="btn" id="p30">暂停 30 分钟</button>
+    <button class="btn" id="p60">1 小时</button>
+    <button class="btn" id="pnight">到明天</button>
+  </div>
+  <div class="btnrow" style="margin-top:0">
+    <button class="btn pri" id="now">立即截屏</button>
+    <button class="btn" id="resume">恢复采集</button>
+  </div>
+  <div class="row" style="border:0;padding-top:12px">
+    <div class="quick" style="flex:1">
+      <button class="btn" id="open-main">打开主界面</button>
+      <button class="btn" id="open-dir">截图目录</button>
+    </div>
+  </div>
+  <div class="kv"><span>开机自启</span><b id="auto-lab">—</b></div>
+  <div class="kv"><span>热键</span><b id="hotkey-lab">Ctrl+Alt+P</b></div>
+  <div class="foot">
+    <button class="btn" id="quit">退出时璃</button>
+  </div>
+
+<script src="renderer/tray.js"></script>
+</body>
+</html>

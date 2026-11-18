@@ -1,0 +1,57 @@
+{
+  "name": "timeglass",
+  "productName": "Timeglass",
+  "version": "0.1.2",
+  "description": "莫奈取色玻璃外壳 · 定时截屏归档 + 图形化 FFmpeg 桌面小工具",
+  "main": "main.js",
+  "author": "WorkBuddy",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win"
+  },
+  "build": {
+    "appId": "com.timeglass.app",
+    "productName": "Timeglass",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "tray.html",
+      "lib/**/*",
+      "renderer/**/*",
+      "assets/**/*",
+      "!**/*.map",
+      "!build/**",
+      "!tools/**",
+      "!dist/**",
+      "!node_modules/jimp/**",
+      "!node_modules/png-to-ico/**"
+    ],
+    "win": {
+      "target": [
+        "portable",
+        "nsis"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "portable": {
+      "artifactName": "Timeglass-${version}-portable.exe"
+    },
+    "nsis": {
+      "artifactName": "Timeglass-${version}-setup.exe",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^26.18.0",
+    "jimp": "^1.6.1",
+    "png-to-ico": "^3.0.2"
+  }
+}
