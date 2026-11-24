@@ -33,12 +33,20 @@ const dayKey = ts => {
 };
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-/* 缩略图缓存：file -> dataURL */
+/* 缩略图缓存：file -> dataURL（LRU，上限 400 张 ≈ 16MB 字符串） */
 const imgCache = new Map();
+const CACHE_MAX = 400;
 async function thumbOf(file, maxW = 360) {
-  if (imgCache.has(file)) return imgCache.get(file);
-  const url = await api.meta.image(file);
-  if (url) imgCache.set(file, url);
+  if (imgCache.has(file)) {
+    const u = imgCache.get(file);
+    imgCache.delete(file); imgCache.set(file, u); // 命中移到队尾
+    return u;
+  }
+  const url = await api.meta.thumb({ file, maxW });
+  if (url) {
+    imgCache.set(file, url);
+    if (imgCache.size > CACHE_MAX) imgCache.delete(imgCache.keys().next().value);
+  }
   return url;
 }
 
@@ -66,7 +74,14 @@ const CRUMBS = {
 /* ---------------- 视图切换 ---------------- */
 async function goto(view) {
   document.querySelectorAll('.rail .rbtn').forEach(b => b.classList.toggle('on', b.dataset.view === view));
-  document.querySelectorAll('.view').forEach(v => v.classList.toggle('on', v.id === 'view-' + view));
+  // 切走即卸载：隐藏视图的 DOM 与解码位图不常驻内存。
+  // 回切时 goto 本来就会重渲染（状态都在全局变量里），所以清空是零成本优化。
+  document.querySelectorAll('.view').forEach(v => {
+    const on = v.id === 'view-' + view;
+    v.classList.toggle('on', on);
+    if (!on) v.innerHTML = '';
+  });
+  if (liveTimer) { clearInterval(liveTimer); liveTimer = null; } // 离开时间轴不再空转实时计时器
   $('#detail').classList.remove('on'); // 切视图时收起详情面板
   $('#crumb').textContent = CRUMBS[view][0];
   $('#crumb-sub').textContent = CRUMBS[view][1];
@@ -342,7 +357,7 @@ async function renderArchive() {
         d.className = 'archcard' + (sel ? ' selected' : '');
         d.innerHTML = `<img alt=""><div class="m"><span class="app">${esc(s.app || '·')}</span><span>${dayKey(s.ts).slice(5)} ${fmtTime(s.ts)}</span></div>${archFilter.selectMode ? '<span class="pick"></span>' : ''}`;
         grid.appendChild(d);
-        thumbOf(s.file).then(url => { if (url) d.querySelector('img').src = url; });
+        thumbOf(s.file).then(url => { if (url) { const im = d.querySelector('img'); if (im) im.src = url; } });
         d.onclick = () => {
           if (archFilter.selectMode) {
             archFilter.selected.has(s.id) ? archFilter.selected.delete(s.id) : archFilter.selected.add(s.id);
@@ -426,7 +441,7 @@ function debounceRender() {
 
 /* 详情面板 */
 async function openDetail(s) {
-  const url = await thumbOf(s.file, 0) || await api.meta.image(s.file);
+  const url = await api.meta.image(s.file); // 详情要高清原图，直读不进缩略图缓存
   const tags = [];
   if (s.app) tags.push(s.app);
   const d = $('#detail');

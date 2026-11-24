@@ -23,7 +23,8 @@ contextBridge.exposeInMainWorld('api', {
     list: q => invoke('meta:list', q || {}),
     stats: () => invoke('meta:stats'),
     image: file => invoke('meta:image', file),
-    remove: id => invoke('meta:remove', id)
+    thumb: p => invoke('meta:thumb', p),
+    remove: id => invoke('meta:delete', id)
   },
   /* 键鼠活跃度（按分钟聚合，按天查询） */
   activity: {

@@ -1,0 +1,21 @@
+name: checks
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1' # 纯逻辑测试不需要 electron 二进制
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm install
+      - run: npm test
+      - name: Syntax check (all sources)
+        run: |
+          for f in main.js preload.js tray.js lib/store.js lib/capture.js lib/activity.js lib/activityStore.js lib/transcode.js renderer/app.js renderer/engine.js renderer/tray.js; do
+            node --check "$f"
+          done

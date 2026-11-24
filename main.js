@@ -4,12 +4,32 @@
    ============================================================ */
 'use strict';
 const { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain,
-        dialog, nativeTheme, powerMonitor, screen, shell } = require('electron');
+        dialog, nativeTheme, nativeImage, powerMonitor, screen, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 
 const store = require('./lib/store');
 const capture = require('./lib/capture');
+
+/* IPC 通道对账：记录 ipcMain.handle 注册集合，启动时与 preload 实际调用核对
+   （防止 meta:remove vs meta:delete 这类通道名静默失配） */
+const ipcChannels = new Set();
+{
+  const origHandle = ipcMain.handle.bind(ipcMain);
+  ipcMain.handle = (ch, fn) => { ipcChannels.add(ch); return origHandle(ch, fn); };
+}
+function auditIpcChannels() {
+  try {
+    const src = fs.readFileSync(path.join(__dirname, 'preload.js'), 'utf8');
+    const used = new Set([...src.matchAll(/invoke\(\s*'([^']+)'/g)].map(m => m[1]));
+    const missing = [...used].filter(c => !ipcChannels.has(c));
+    const unused = [...ipcChannels].filter(c => !used.has(c));
+    if (missing.length) console.error('[ipc-audit] ✗ preload 调用了未注册通道（会静默失败）:', missing);
+    if (unused.length) console.warn('[ipc-audit] 已注册但 preload 未调用:', unused);
+    if (!missing.length && !unused.length) console.log('[ipc-audit] ✓ 通道全部一致（' + ipcChannels.size + ' 个）');
+  } catch (e) { console.error('[ipc-audit] failed:', e.message); }
+}
 const transcode = require('./lib/transcode');
 const activity = require('./lib/activity');
 const activityStore = require('./lib/activityStore');
@@ -255,19 +275,56 @@ ipcMain.handle('activity:today', () => {
   }
   return merged;
 });
+/* 路径安全：截图类 IPC 只允许操作存储目录内的文件 */
+function shotRoot() { try { return path.resolve(store.getSettings().storage.dir); } catch (e) { return null; } }
+function safeShotPath(file) {
+  const root = shotRoot();
+  if (!root || typeof file !== 'string' || !file) return null;
+  const p = path.resolve(file);
+  return (p === root || p.startsWith(root + path.sep)) ? p : null;
+}
+
+/* 缩略图：nativeImage 缩放 + 磁盘缓存（key 含 mtime，原图变更自动失效） */
+const THUMB_DIR = path.join(app.getPath('userData'), 'data', 'thumbs');
+ipcMain.handle('meta:thumb', (e, payload) => {
+  try {
+    const file = safeShotPath(payload && payload.file);
+    if (!file) return null;
+    const maxW = Math.min(Math.max(Math.round(+payload.maxW) || 360, 120), 720);
+    const st = fs.statSync(file);
+    const key = crypto.createHash('md5').update(file + '|' + st.mtimeMs + '|' + maxW).digest('hex') + '.jpg';
+    if (!fs.existsSync(THUMB_DIR)) fs.mkdirSync(THUMB_DIR, { recursive: true });
+    const cached = path.join(THUMB_DIR, key);
+    let buf;
+    if (fs.existsSync(cached)) buf = fs.readFileSync(cached);
+    else {
+      const img = nativeImage.createFromPath(file);
+      if (img.isEmpty()) return null;
+      const w = img.getSize().width;
+      buf = (w > maxW ? img.resize({ width: maxW }) : img).toJPEG(72);
+      fs.writeFileSync(cached, buf);
+    }
+    return 'data:image/jpeg;base64,' + buf.toString('base64');
+  } catch (err) { return null; }
+});
 ipcMain.handle('meta:image', (e, file) => {
-  try { return 'data:image/png;base64,' + fs.readFileSync(file).toString('base64'); }
+  const p = safeShotPath(file);
+  if (!p) return null;
+  try { return 'data:image/png;base64,' + fs.readFileSync(p).toString('base64'); }
   catch (err) { return null; }
 });
 ipcMain.handle('meta:delete', (e, id) => {
   const s = store.shots().find(x => x.id === id);
-  if (s && fs.existsSync(s.file)) { try { fs.unlinkSync(s.file); } catch (e2) {} }
+  if (s) {
+    const p = safeShotPath(s.file);
+    if (p && fs.existsSync(p)) { try { fs.unlinkSync(p); } catch (e2) {} }
+  }
   store.removeShot(id);
   broadcast('tg-shot-deleted', id);
   return true;
 });
-ipcMain.handle('shell:openPath', (e, p) => shell.openPath(p));
-ipcMain.handle('shell:showInFolder', (e, p) => shell.showItemInFolder(p));
+ipcMain.handle('shell:openPath', (e, p) => shell.openPath(safeShotPath(p) || ''));
+ipcMain.handle('shell:showInFolder', (e, p) => { const q = safeShotPath(p); if (q) shell.showItemInFolder(q); return true; });
 
 ipcMain.handle('dialog:pickVideo', async () => {
   const r = await dialog.showOpenDialog(win, { filters: [{ name: '视频', extensions: ['mp4', 'mkv', 'mov', 'avi', 'webm', 'flv', 'ts', 'wmv'] }], properties: ['openFile'] });
@@ -341,6 +398,7 @@ function checkIdle() {
 app.whenReady().then(() => {
   createWindow();
   createTray();
+  auditIpcChannels();
 
   const st = store.getSettings();
   try {
